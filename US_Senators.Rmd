@@ -1,0 +1,441 @@
+---
+title: "assignment4"
+author: "szumin"
+date: "4/7/2018"
+output: html_document
+---
+
+```{r setup}
+# I hate homework
+
+library(ggplot2)
+library(network)
+library(stringr)
+library(visNetwork)
+library(tidyverse)
+library(jsonlite)      # read in the JSON data from the API
+library(dplyr)         # data munging
+library(igraph)        # work with graphs in R
+library(ggnetwork)     # devtools::install_github("briatte/ggnetwork")
+library(intergraph)    # ggnetwork needs this to wield igraph things
+library(ggrepel)       # fancy, non-ovelapping labels
+library(svgPanZoom)    # zoom, zoom
+
+library(DT)            # pretty tables
+library(ggnet)
+
+library(tm)
+library(SnowballC)
+library(tidytext)
+library(stringr)
+library(quanteda)
+library(stringi)
+library(wordcloud)
+library(RColorBrewer)
+library(lubridate)
+```
+
+```{r Q1a}
+
+sen_follow <- read.csv("/Users/Sumin/Desktop/R/senators_follow.csv")
+sen_twt <- read.csv("/Users/Sumin/Desktop/R/senators_twitter.csv")
+
+#top and last three senates for following and followed by other senates 
+
+link <- sen_follow
+
+
+link_flw <- link%>%
+  select(source, target, following)%>%
+  group_by(source) %>%
+  summarise(sum_flw = sum(following))
+
+
+link_flw <- link_flw %>%
+  arrange(desc(sum_flw))
+##### Top 3 Senators for following people
+head(link_flw)
+
+link_flwed <- link%>%
+  select(source, target, followed_by)%>%
+  group_by(source) %>%
+  summarise(sum_flwed = sum(followed_by))
+
+link_flwed <- link_flwed %>%
+  arrange(desc(sum_flwed))
+##### Top 3 Senators for being followed
+head(link_flwed)
+
+#link_all <- full_join(link_flw,link_flwed, by = "source")
+#link_all <- link_all %>%
+#  mutate(sum = sum_flw + sum_flwed) %>%
+#  arrange(desc(sum))
+
+##plot the network
+melted_link <-
+  link %>%
+  dplyr::filter(following == TRUE) %>%
+  dplyr::select(source, target)
+
+melted_graph <- graph_from_data_frame(d = melted_link, directed = T)
+
+V(melted_graph)$size <- centralization.degree(melted_graph)$res
+
+set.seed(1234)
+link1_df <- ggnetwork(melted_graph, layout = "fruchtermanreingold", arrow.gap = 0, cell.jitter = 0)
+
+link1_df$x <- as.vector(link1_df$x)
+link1_df$y <- as.vector(link1_df$y)
+link1_df$xend <- as.vector(link1_df$xend)
+link1_df$yend <- as.vector(link1_df$yend)
+
+link1_df <- link1_df %>%
+  inner_join(sen_twt, by = c('vertex.names' = 'Official.Twitter')) %>%
+  dplyr::select(-State, -Senator, -Staff.Twitter, -Campaign.Twitter, -label)
+
+color <- c("Democratic Party" = "#2b8cbe", "Republican Party"= "#de2d26", "Independent" = "#2ca25f")
+
+g1 <- ggplot()+
+  geom_edges(data = link1_df, aes(x = x, y = y, xend = xend, yend = yend), color = "#a5a29f", curvature=0.1, size=0.15, alpha=1/2, arrow = arrow(length = unit(12, "pt")))+
+  geom_nodes(data = link1_df, aes(x = x, y = y, xend = xend, yend = yend, color = Party.affiliation, size = sqrt(size)/ pi), alpha = .8)+
+  geom_label_repel(data= unique(link1_df[link1_df$size>150,c(1,2,5)]),
+                   aes(x=x, y=y, label=vertex.names), 
+                   size=2, color="#111111")+
+  scale_color_manual(values = color, name = "Party Affiliation")+
+  theme_blank()+
+  ggtitle("Network of Senators on Twitter: Followers")+
+  labs(size="Area of Centrality")
+
+
+```
+
+
+```{r Q1b}
+
+wc <- cluster_walktrap(melted_graph)  # find "communities"
+members <- membership(wc)
+
+member_df <- data.frame(Group = as.vector(members), twt = names(members), stringsAsFactors = T)
+member_df$Group <- as.character(member_df$Group)
+
+link2_df <- link1_df %>%
+  inner_join(member_df, by = c('vertex.names' = 'twt'))
+
+color2 <- c("2" = "#2b8cbe", "1"= "#de2d26")
+
+g2 <- ggplot()+
+  geom_edges(data = link2_df, aes(x = x, y = y, xend = xend, yend = yend), color = "#a5a29f",curvature=0.1, size=0.15, alpha=1/2)+
+  geom_nodes(data = link2_df, aes(x = x, y = y, xend = xend, yend = yend, color = Group, size = sqrt(size)/ pi), alpha = .8)+
+  geom_label_repel(data= unique(link2_df[link2_df$size>150,c(1,2,5)]),
+                   aes(x=x, y=y, label=vertex.names), 
+                   size=2, color="#111111")+
+  theme_blank()+
+  scale_color_manual(values = color2, name = "Cluster Identification")+
+  ggtitle("Network of Senators on Twitter: Cluster Identification")+
+  labs(size="Area of Centrality")
+
+g2_1 <- 
+  ggplot(link2_df, aes(x = Party.affiliation, y = Group))+
+  geom_point(aes(color = Group))+
+  scale_color_manual(values = color2)+
+  ggtitle("Party Affiliation vs. Cluster Identification")+
+  xlab("Party Affiliation")+
+  ylab("Cluster Identification")+
+  theme_bw()+
+  theme(legend.position = "right")
+  
+  
+g1
+g2
+g2_1
+
+
+```
+
+```{r Q2a}
+
+tweet <- readRDS("/Users/Sumin/Desktop/R/senator_tweets.RDS")
+
+q2_hashtags <- tweet$hashtags
+hashtags_cp <- Corpus(VectorSource(q2_hashtags))
+
+set.seed(3)
+wordcloud(hashtags_cp, max.words = 100, colors = c('#bfd3e6','#9ebcda','#8c96c6','#8c6bb1','#88419d','#6e016b'))
+text(x=0.5, y=1, "Most Common Hashtag over Time for Senators")
+
+```
+
+```{r Q2b}
+#clean the data
+tweet_new <- tweet %>%
+  select(created_at, screen_name, hashtags)
+
+tweet_new$created_at <- lubridate::ymd_hms(tweet_new$created_at)
+tweet_new <- tweet_new %>%
+  filter(created_at >= "2018-01-01")
+tweet_new <- tweet_new %>%
+  inner_join(sen_twt, by = c('screen_name' = 'Official.Twitter')) %>%
+  dplyr::select(-State, -Senator, -Staff.Twitter, -Campaign.Twitter, -label)
+
+tweet_d <- tweet_new %>%
+  filter(Party.affiliation == "Democratic Party")
+tweet_r <- tweet_new %>%
+  filter(Party.affiliation == "Republican Party")
+
+tweet_dcp <- Corpus(VectorSource(tweet_d$hashtags))
+tweet_rcp <- Corpus(VectorSource(tweet_r$hashtags))
+
+set.seed(3)
+wordcloud(tweet_dcp, max.words = 100, colors = c("#d0d1e6", "#a6bddb", "#74a9cf", "#3690c0", "#0570b0", "#034e7b"))
+text(x=0.5, y=1, "Most Common Hashtags from Democratic Senators in 2018")
+
+set.seed(123)
+wordcloud(tweet_rcp, max.words = 100, colors = c("#fc9272", "#fb6a4a", "#ef3b2c", "#cb181d", "#a50f15", "#67000d"))
+text(x=0.5, y=0.9, "Most Common Hashtags from Republican Senators in 2018")
+```
+
+```{r q2c}
+##I thought it's q2b so I have files named q2b and I am lazy to change them  :p
+
+tweet_q2b <- tweet %>%
+  select(created_at, screen_name, hashtags)
+tweet_q2b$created_at <- lubridate::ymd_hms(tweet_q2b$created_at)
+tweet_q2b <- tweet_q2b %>%
+  filter(created_at >= "2010-01-01")
+
+
+supports_gun_control <- c('guncontrol', 'gunsense', 'gunsafety', 'neveragain','marchforourlives','guncontrolnow','control','shooting','gunviolence','safe','gunlaws')
+
+supports_gun_ownership <- c('2ndamendment', 'gunrights', 'nra', 'progun', 'bodyguard','NRA','liberals','people','GunOwners', 'Freedom','2A','DefendTheSecond')
+
+tweet_q2b <- tweet_q2b %>%
+  unnest(hashtags) %>%
+  mutate(
+    supports_gun_control = hashtags %in% supports_gun_control,
+    supports_gun_ownership = hashtags %in% supports_gun_ownership
+  ) %>%
+  filter(supports_gun_control | supports_gun_ownership)
+
+tweet_q2b <- tweet_q2b %>%
+  inner_join(sen_twt, by = c('screen_name' = 'Official.Twitter'))%>%
+  dplyr::select(-State, -Senator, -Staff.Twitter, -Campaign.Twitter, -label)
+
+plot_q2b1 <- ggplot(tweet_q2b, aes(x = created_at, y = supports_gun_control))+
+  geom_point(aes(color = Party.affiliation))+
+  scale_color_manual(values = color)+
+  ggtitle("Senators' Tweets Support Gun Control, 2010-2018", subtitle = c('Hashtags: #guncontrol, #gunsense, #gunsafety, #neveragain, #marchforourlives'))+
+  xlab("Year")+
+  ylab("Support Gun Control")+
+  theme_bw()+
+  theme(legend.position ="right",legend.title=element_blank())
+
+plot_q2b2 <- ggplot(tweet_q2b, aes(x = created_at, y = supports_gun_ownership))+
+  geom_point(aes(color = Party.affiliation))+
+  scale_color_manual(values = color)+
+  ggtitle("Senators' Tweets Support Gun Ownership, 2010-2018", subtitle = c('Hashtags: #2ndamendment, #gunrights, #nra, #progun, #bodyguard'))+
+  xlab("Year")+
+  ylab("Support Gun Owernship")+
+  theme_bw()+
+  theme(legend.position ="right",legend.title=element_blank())
+
+#word cloud
+
+
+tweet_q2b_dem <- tweet_q2b %>%
+  filter(Party.affiliation == "Democratic Party") 
+
+tweet_q2b_rep <- tweet_q2b %>%
+  filter(Party.affiliation == "Republican Party")
+
+tweet_q2b_dem <- Corpus(VectorSource(tweet_q2b_dem$hashtags))
+tweet_q2b_rep <- Corpus(VectorSource(tweet_q2b_rep$hashtags))
+
+
+set.seed(1)
+wordcloud(tweet_q2b_dem, min.freq =1, max.words = 100, scale=c(3,1),
+          colors = "#2b8cbe")
+text(x=0.5, y=1, "Gun-related Hashtags from Democratic Senators' Tweets, 2010-2018")
+
+set.seed(1)
+wordcloud(tweet_q2b_rep, min.freq =1, max.words = 100, scale=c(3,.5),
+          colors = "#de2d26")
+text(x=0.5, y=0.9, "Gun-related Hashtags from Republican Senators' Tweets, 2010-2018")
+
+
+plot_q2b1
+plot_q2b2
+```
+
+```{r q2d}
+
+tweet_q2d <- tweet %>%
+  select(created_at, screen_name, hashtags)
+tweet_q2d$created_at <- lubridate::ymd_hms(tweet_q2d$created_at)
+tweet_q2d <- tweet_q2d %>%
+  filter(created_at >= "2018-02-14")
+tweet_q2d <- tweet_q2d %>%
+  unnest(hashtags)
+
+tweet_q2dhash <- tweet_q2d %>%
+  filter(hashtags %in% supports_gun_control | hashtags %in% supports_gun_ownership) %>%
+  select(hashtags)
+
+tweet_q2dcp <- Corpus(VectorSource(tweet_q2dhash))
+
+set.seed(3)
+wordcloud(tweet_q2dcp,min.freq = 1, max.words = 100, colors = brewer.pal(8,"Greens"), scale=c(3,.5))
+text(x=0.5, y=1, "Senators' Gun-Related Hashtags on Twitter after Parkland Shooting")
+```
+
+```{r q3a}
+
+tweet_q3a <- tweet %>%
+  filter(is_retweet == T) %>%
+  select(created_at, screen_name, text, mentions_screen_name)
+
+#data$var <- str_extract(string = data$tweet, pattern = perl("(?<=RT @).*(?=:)"))
+#str_extract(string = tweet_q3a$text, pattern = "(?<=@).*(?=:)")
+#str_extract(string = tweet_q3a$text, pattern = perl("(?<=RT @).+(?=:)"))
+#tweet_q3a$text1 <- str_split_fixed(tweet_q3a$text, ": ", 2)
+
+tweet_q3a <- tweet_q3a %>%
+  unnest(mentions_screen_name)
+
+tweet_q3a <- tweet_q3a %>%
+  arrange(created_at, screen_name, text) %>%
+  group_by(created_at)%>%
+  slice(1)
+
+#filter
+tweetq3a_dem <- sen_twt %>%
+  filter(Party.affiliation == "Democratic Party") %>%
+  select(Official.Twitter)
+tweetq3a_dem <- lapply(tweetq3a_dem, as.character)
+tweetq3a_dem <- unlist(tweetq3a_dem)
+
+tweetq3a_rep <- sen_twt %>%
+  filter(Party.affiliation == "Republican Party") %>%
+  select(Official.Twitter)
+tweetq3a_rep <- lapply(tweetq3a_rep, as.character)
+tweetq3a_rep <- unlist(tweetq3a_rep)
+# have these names?
+tweet_q3a$rt_dem <- tweet_q3a$mentions_screen_name %in% tweetq3a_dem
+tweet_q3a$rt_rep <- tweet_q3a$mentions_screen_name %in% tweetq3a_rep
+
+#calculate the amount of rt
+
+#time groups
+
+tweet_q3a$created_at <- lubridate::ymd_hms(tweet_q3a$created_at)
+#setDT(tweet_q3a)
+
+tweet_q3a$interval = year(tweet_q3a$created_at) %/% 1
+
+tweet_q3a <-tweet_q3a %>%
+  arrange(screen_name)%>%
+  group_by(screen_name, interval) %>%
+  add_tally(rt_dem) %>%
+  rename("rt_demsum" = "n")
+
+tweet_q3a <- tweet_q3a %>%
+  arrange(screen_name)%>%
+  group_by(screen_name, interval) %>%
+  add_tally(rt_rep) %>%
+  rename("rt_repsum" = "n")
+
+tweet_q3a <- tweet_q3a %>%
+  inner_join(sen_twt, by = c('screen_name' = 'Official.Twitter'))%>%
+  select(-State, -Senator, -Staff.Twitter, -Campaign.Twitter, -label)%>%
+  mutate(text = NULL)
+  
+
+tweet_q3a <- tweet_q3a %>%
+         mutate(gap = ifelse(Party.affiliation == "Democratic Party", rt_demsum / rt_repsum,ifelse(Party.affiliation == "Republican Party", rt_repsum/ rt_demsum, NA)))
+
+
+# ready for plotting
+tweet_q3a <- tweet_q3a[is.finite(tweet_q3a$gap),]
+
+plot_q3a <- ggplot(subset(tweet_q3a, Party.affiliation != "Independent"), aes(x = created_at, y = gap))+
+  geom_point(aes(color = Party.affiliation))+
+  facet_wrap(~Party.affiliation)+
+  scale_color_manual(values = color)+
+  ggtitle('Which Party Is More Intolerant?', subtitle = "A Peek from Senator's Retweets:\nRt from the Own Party ÷ Rt from the Opposite Party")+
+  xlab("Year")+
+  ylab("Gap")+
+  theme_bw()+
+  theme(legend.position ="right",legend.title=element_blank())+
+  geom_smooth(method = lm, se = F)
+plot_q3a 
+
+```
+
+
+```{r q3-2}
+
+
+tweet_q3b <- tweet %>%
+  filter(is_retweet == F) %>%
+  select(screen_name, mentions_screen_name)
+
+tweet_q3b <- tweet_q3b %>%
+  unnest(mentions_screen_name)
+
+tweet_q3b <- tweet_q3b %>%
+  filter(tweet_q3b$mentions_screen_name == T %in% tweetq3a_dem | tweet_q3b$mentions_screen_name %in% tweetq3a_rep == T)
+
+
+#graph object
+graph_q3b <- graph_from_data_frame(d = tweet_q3b, directed = F)
+
+V(graph_q3b)$size <- centralization.degree(graph_q3b)$res
+
+set.seed(1234)
+q3b_df <- ggnetwork(graph_q3b, layout = "fruchtermanreingold", arrow.gap = 0, cell.jitter = 0)
+
+q3b_df$x <- as.vector(q3b_df$x)
+q3b_df$y <- as.vector(q3b_df$y)
+q3b_df$xend <- as.vector(q3b_df$xend)
+q3b_df$yend <- as.vector(q3b_df$yend)
+
+q3b_df <- q3b_df %>%
+  inner_join(sen_twt, by = c('vertex.names' = 'Official.Twitter')) %>%
+  dplyr::select(-State, -Senator, -Staff.Twitter, -Campaign.Twitter, -label)
+
+plot_q3b <- ggplot()+
+  geom_edges(data = q3b_df, aes(x = x, y = y, xend = xend, yend = yend), color = "#a5a29f",curvature=0.1, size=0.15, alpha=1/2)+
+  geom_nodes(data = q3b_df, aes(x = x, y = y, xend = xend, yend = yend, color = Party.affiliation, size = sqrt(size)/ pi), alpha = .8)+
+  geom_label_repel(data= unique( q3b_df[ q3b_df$size>260,c(1,2,5)]),
+                   aes(x=x, y=y, label=vertex.names), 
+                   size=2, color="#111111")+
+  theme_blank()+
+  scale_color_manual(values = color, name = "Party Affiliation")+
+  ggtitle("Network of Senators on Twitter: Mentions")+
+  labs(size="Area of Centrality")
+
+plot_q3b
+
+```
+
+
+```{r q3c}
+library(httr)
+
+library(rtweet)
+library(twitteR)
+
+options(httr_oauth_cache=T)  
+
+
+#req <- GET("https://api.twitter.com/1.1/statuses/home_timeline.json",
+#           config(token = twitter_token))
+
+#tweetsq3c <- content(req)
+# available data for first tweet on my timeline
+#names(tweetsq3c[[1]])
+#tweetsq3c[[1]]$user$name
+#writeLines(tweetsq3c[[1]]$text)
+
+### I didn't finish the bonus :p
+
+```
