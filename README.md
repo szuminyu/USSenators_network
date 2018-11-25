@@ -1,5 +1,3 @@
-# project4_Senators
-
 I use the dataset from Twitter. You can open the HTML file to see all the graphs I produce. Here, I provide some examples from my work.
 
 Example_1: Network of Followers
